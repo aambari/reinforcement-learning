@@ -1,12 +1,10 @@
 # Load libraries
-import datetime;
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import datetime
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pandas import read_csv
-import seaborn as sns
+# import seaborn as sns
 import math
 import random
 import h5py
@@ -22,55 +20,64 @@ from keras.optimizers import Adam
 from keras.layers import Dense
 
 
+
+# List physical devices
+gpus = tf.config.list_physical_devices('GPU')
+print(str(datetime.datetime.now().time().strftime("%H:%M:%S")) + " GPUs available: ", gpus)
+
+
+# Set memory growth limitation (just in case you're using GPU later)
+
+if gpus:
+    print(gpus)
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+
+# Define EMA periods
+emaPeriodFast = 5
+emaPeriodSlow = 10
+
 # Import data from local CSV file
 dataset = read_csv('c://ml//backtesting//EURUSD240-small.csv') * 1000
+dataset["EMAFast"] = ta.ema(dataset.Close, length=emaPeriodFast)
+dataset["EMASlow"] = ta.ema(dataset.Close, length=emaPeriodSlow)
 
-# Disable the warnings
+# Disable warnings
 import warnings
-
 warnings.filterwarnings('ignore')
 
-# Check data types and shape
-print(dataset.shape)
-# set_option('display.width', 100)
-print(dataset.head(5))
-print('Null Values =', dataset.isnull().values.any())
-
-# Fill the missing values
+# Fill missing values
 dataset = dataset.fillna(method='ffill')
-print(dataset.head(2))
 
 # Extract OHLC data and normalize
-dataset = dataset[['Open', 'High', 'Low', 'Close']]
+dataset = dataset[['Open', 'High', 'Low', 'Close', 'EMAFast', 'EMASlow']] #, 'EMAFast', 'EMASlow'
 X = dataset.values.tolist()
 
 validation_size = 0.2
 train_size = int(len(X) * (1 - validation_size))
 X_train, X_test = X[0:train_size], X[train_size:len(X)]
 
-# Import Keras libraries for model
-from keras.models import Sequential
-from keras.models import load_model
-from keras.layers import Dense
-from keras.optimizers import Adam
-
-
 # Define the Agent class
 class Agent:
-    def __init__(self, state_size, is_eval=False, model_name=""):
+    def __init__(self, state_size, is_eval=False, model_name="", max_inventory=3):
         self.state_size = state_size  # Number of inputs (OHLC for 5 days)
         self.action_size = 3  # Sit, buy, sell
         self.memory = deque(maxlen=1000)
         self.inventory = []
         self.model_name = model_name
         self.is_eval = is_eval
+        self.max_inventory = max_inventory  # Maximum allowed buys
 
         self.gamma = 0.95
         self.epsilon = 1.0
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.995
 
-        self.model = load_model(model_name) if is_eval else self._model()
+        # Load saved model if available
+        self.model = load_model(model_name) if model_name else self._model()
 
     def _model(self):
         model = Sequential()
@@ -99,43 +106,41 @@ class Agent:
                 target = reward + self.gamma * np.amax(self.model.predict(next_state, verbose=0)[0])
             target_f = self.model.predict(state, verbose=0)
             target_f[0][action] = target
-            self.model.fit(state, target_f, epochs=1, verbose=0)
-            reset_tensorflow_keras_backend()
+
+        self.model.fit(state, target_f, epochs=1, verbose=0)
+        reset_tensorflow_keras_backend()
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
+    # Save model weights
+    def save_model(self, model_name):
+        self.model.save(model_name)
+        print(f'Model saved as {model_name}')
 
-# Define helper functions
-
-# Format price output
+# Helper Functions
 def formatPrice(n):
     return ("-$" if n < 0 else "$") + "{0:.2f}".format(abs(n))
 
-
-# Return sigmoid of x
 def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
-
-# Generate an n-day state representation including OHLC data
+# State representation for past n days
 def getState(data, t, n):
     d = t - n + 1
     block = data[d:t + 1] if d >= 0 else -d * [data[0]] + data[0:t + 1]
 
     res = []
-    # Create state representation by flattening OHLC data for the past n days
     for i in range(n):
         ohlc_diff = [
             sigmoid(block[i][1] - block[i][0]),  # High - Open
             sigmoid(block[i][2] - block[i][0]),  # Low - Open
-            sigmoid(block[i][3] - block[i][0])  # Close - Open
+            sigmoid(block[i][3] - block[i][0])   # Close - Open
         ]
         res.extend(ohlc_diff)
 
     return np.array([res])
 
-
-# Plot the behavior of the output
+# Plot the output behavior
 def plot_behavior(data_input, states_buy, states_sell, profit):
     fig = plt.figure(figsize=(15, 5))
     plt.plot(data_input, color='r', lw=2.)
@@ -145,15 +150,24 @@ def plot_behavior(data_input, states_buy, states_sell, profit):
     plt.legend()
     plt.show()
 
+# Risk-to-reward logic
+def calculate_reward(current_price, bought_price, high_since_bought, low_since_bought, risk_reward_ratio):
+    profit = current_price - bought_price
+    stop_loss = bought_price - low_since_bought
+    take_profit = high_since_bought - bought_price
+    if profit >= risk_reward_ratio * stop_loss:
+        return profit
+    elif stop_loss >= profit:
+        return -stop_loss
+    else:
+        return 0
 
-# Initialize and run the agent
-window_size = 5  # 5 days of OHLC data
-agent = Agent(state_size=window_size * 3)  # 3 values (High-Open, Low-Open, Close-Open) for each day
-data = X_train
-l = len(data) - 1
-batch_size = 32
-episode_count = 1
-
+# Detect key press to save the model
+# def check_save_model(agent, episode):
+#     if keyboard.is_pressed('ctrl+m'):
+#         save_name = f"model_ep{episode}.h5"
+#         agent.save_model(save_name)
+#         print(f'Model saved manually as {save_name}')
 
 def reset_tensorflow_keras_backend():
     import tensorflow as tf
@@ -161,31 +175,51 @@ def reset_tensorflow_keras_backend():
     tf.keras.backend.clear_session()
     _ = gc.collect()
 
+# Initialize agent
+window_size = 5
+max_inventory = 1  # Max concurrent buys
+agent = Agent(state_size=window_size * 3, max_inventory=max_inventory)
+data = X_train
+l = len(data) - 1
+batch_size = 32
+episode_count = 10
 
+# Training loop with risk-to-reward
 for e in range(episode_count + 1):
-    print("Running episode " + str(e) + "/" + str(episode_count))
+    print(f"Running episode {e}/{episode_count}")
     state = getState(data, 0, window_size)
     total_profit = 0
     agent.inventory = []
     states_sell = []
     states_buy = []
+    high_since_bought = low_since_bought = None
+    risk_reward_ratio = 2  # Define desired risk-to-reward ratio
+
     for t in range(l):
         action = agent.act(state)
         next_state = getState(data, t + 1, window_size)
+        current_price = data[t][3]  # Close price
+        high = data[t][1]  # High price
+        low = data[t][2]  # Low price
         reward = 0
 
-        if action == 1:  # Buy
-            agent.inventory.append(data[t][3])  # Use Close price for buy
+        if action == 1 and len(agent.inventory) < agent.max_inventory:  # Buy if inventory is below limit
+            agent.inventory.append(current_price)
+            high_since_bought = high
+            low_since_bought = low
             states_buy.append(t)
-            print("Buy: " + formatPrice(data[t][3]))
+            print("Buy: " + formatPrice(current_price))
 
         elif action == 2 and len(agent.inventory) > 0:  # Sell
             bought_price = agent.inventory.pop(0)
-            reward = max(data[t][3] - bought_price, 0)
-            total_profit += data[t][3] - bought_price
+            high_since_bought = max(high_since_bought, high)
+            low_since_bought = min(low_since_bought, low)
+
+            reward = calculate_reward(current_price, bought_price, high_since_bought, low_since_bought, risk_reward_ratio)
+            total_profit += reward
             states_sell.append(t)
             s = str(datetime.datetime.now().time().strftime("%H:%M:%S"))
-            print(f"{s} | Sell: {formatPrice(data[t][3] )} | Profit: {formatPrice(reward)} / Total Profit: {formatPrice(total_profit)}")
+            print(f"{s} | Sell: {formatPrice(current_price)} | Profit: {formatPrice(reward)} / Total Profit: {formatPrice(total_profit)}")
 
         done = True if t == l - 1 else False
         agent.memory.append((state, action, reward, next_state, done))
@@ -193,12 +227,18 @@ for e in range(episode_count + 1):
 
         if done:
             print("--------------------------------")
-            print("Total Profit: " + formatPrice(total_profit))
+            print(f"Final Profit: {formatPrice(total_profit)}")
             print("--------------------------------")
             plot_behavior([x[3] for x in data], states_buy, states_sell, total_profit)
 
         if len(agent.memory) > batch_size:
             agent.expReplay(batch_size)
 
+        # check_save_model(agent, e)
+
     if e % 2 == 0:
-        agent.model.save("model_ep" + str(e))
+        agent.save_model(f"model_ep{e}.h5")
+
+
+# Save the final model
+agent.save_model("final_model.h5")

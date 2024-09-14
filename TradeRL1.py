@@ -1,27 +1,46 @@
 # Load libraries
+import datetime
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from pandas import read_csv, set_option
-from pandas.plotting import scatter_matrix
-import seaborn as sns
-from sklearn.preprocessing import StandardScaler
-import datetime
+from pandas import read_csv
+# import seaborn as sns
 import math
-from numpy.random import choice
 import random
-
-
-
-#Import Model Packages for reinforcement learning
+import h5py
+# import keyboard  # For detecting key presses
+import pandas_ta as ta
+import tensorflow as tf
+import gc  # Added for garbage collection
 from keras import layers, models, optimizers
-from keras import backend as K
-from collections import namedtuple, deque
+from collections import deque
+
+from keras.models import Sequential, load_model
+from keras.optimizers import Adam
+from keras.layers import Dense
+
+
+# List physical devices
+gpus = tf.config.list_physical_devices('GPU')
+print(str(datetime.datetime.now().time().strftime("%H:%M:%S")) + " GPUs available: ", gpus)
+
+
+# Set memory growth limitation (just in case you're using GPU later)
+
+if gpus:
+    print(gpus)
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+            print("Memory growth")
+    except RuntimeError as e:
+        print("Errow" + str(e))
+
 
 
 #The data already obtained from yahoo finance is imported.
 # dataset = read_csv('https://raw.githubusercontent.com/tatsath/fin-ml/master/Chapter%209%20-%20Reinforcement%20Learning/Case%20Study%201%20-%20Reinforcement%20Learning%20based%20Trading%20Strategy/data/SP500.csv',index_col=0)
-dataset = read_csv( 'c://ml//backtesting//EURUSD240.csv')*1000
+dataset = read_csv( 'c://ml//backtesting//EURUSD240-small.csv')*1000
 #Diable the warnings
 import warnings
 warnings.filterwarnings('ignore')
@@ -33,7 +52,7 @@ print(dataset.shape)
 
 
 # peek at data
-set_option('display.width', 100)
+# set_option('display.width', 100)
 print(dataset.head(5))
 
 # describe data
@@ -63,7 +82,7 @@ from keras.models import Sequential
 from keras.models import load_model
 from keras.layers import Dense
 from keras.optimizers import Adam
-from IPython.core.debugger import set_trace
+# from IPython.core.debugger import set_trace
 
 import numpy as nppip
 import random
@@ -88,6 +107,8 @@ class Agent:
 
         # self.model = self._model()
 
+
+
         self.model = load_model(model_name) if is_eval else self._model()
 
     # Deep Q Learning model- returns the q-value when given state as input
@@ -110,7 +131,7 @@ class Agent:
     # The trained agents were evaluated by different initial random condition
     # and an e-greedy policy with epsilon 0.05. This procedure is adopted to minimize the possibility of overfitting during evaluation.
 
-    def act(self, state):
+    def action(self, state):
         # If it is test and self.epsilon is still very high, once the epsilon become low, there are no random
         # actions suggested.
         if not self.is_eval and random.random() <= self.epsilon:
@@ -119,6 +140,12 @@ class Agent:
         # set_trace()
         # action is based on the action that has the highest value from the q-value function.
         return np.argmax(options[0])
+
+    # Save model weights
+    def save_model(self, model_name):
+        self.model.save(model_name)
+        print(f'Model saved as {model_name}')
+
 
     def expReplay(self, batch_size):
         mini_batch = []
@@ -134,20 +161,31 @@ class Agent:
             if not done:
                 # set_trace()
                 # max of the array of the predicted.
-                target = reward + self.gamma * np.amax(self.model.predict(next_state)[0])
+                target = reward + self.gamma * np.amax(self.model.predict(next_state, verbose=0)[0])
 
                 # Q-value of the state currently from the table
             target_f = self.model.predict(state, verbose = 0)
             # Update the output Q table for the given action in the table
             target_f[0][action] = target
             # train and fit the model where state is X and target_f is Y, where the target is updated.
-            self.model.fit(state, target_f, epochs=1, verbose=None)
-
+            self.model.fit(state, target_f, epochs=1, verbose=0)
+            reset_tensorflow_keras_backend()
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
-import numpy as np
+# _______________________________________________________________________________________________
+
+
+def reset_tensorflow_keras_backend():
+    import tensorflow as tf
+    import tensorflow.keras as keras
+    tf.keras.backend.clear_session()
+    _ = gc.collect()
+
+
 import math
+
+
 
 # prints formatted price
 def formatPrice(n):
@@ -188,19 +226,14 @@ def plot_behavior(data_input, states_buy, states_sell, profit):
     plt.plot(data_input, color='r', lw=2.)
     plt.plot(data_input, '^', markersize=10, color='m', label='Buying signal', markevery=states_buy)
     plt.plot(data_input, 'v', markersize=10, color='k', label='Selling signal', markevery=states_sell)
-    plt.title('Total gains: %f' % (profit))
+    plt.title('Total gains: %f/' % (profit))
     plt.legend()
     # plt.savefig('output/'+name+'.png')
     plt.show()
 
 
 
-
-
-
-
-
-from IPython.core.debugger import set_trace
+# from IPython.core.debugger import set_trace
 window_size = 3
 agent = Agent(window_size)
 # In this step we feed the closing value of the stock price
@@ -209,9 +242,11 @@ l = len(data) - 1
 #
 batch_size = 32
 # An episode represents a complete pass over the data.
-episode_count = 1
-from keras import config
-config.disable_interactive_logging()
+episode_count = 10
+
+max_trades = 3
+# from keras import config
+# config.disable_interactive_logging()
 for e in range(episode_count + 1):
     print("Running episode " + str(e) + "/" + str(episode_count))
     state = getState(data, 0, window_size + 1)
@@ -221,23 +256,24 @@ for e in range(episode_count + 1):
     states_sell = []
     states_buy = []
     for t in range(l):
-        action = agent.act(state)
+        action = agent.action(state)
         # sit
         next_state = getState(data, t + 1, window_size + 1)
         reward = 0
 
-        if action == 1:  # buy
+        if action == 1 and len(agent.inventory) <= max_trades:  # buy
             agent.inventory.append(data[t])
             states_buy.append(t)
             print("Buy: " + formatPrice(data[t]))
 
         elif action == 2 and len(agent.inventory) > 0:  # sell
             bought_price = agent.inventory.pop(0)
-            reward = max(data[t] - bought_price, 0)
+            # reward = max(data[t] - bought_price, 0)
+            reward = data[t] - bought_price
             total_profit += data[t] - bought_price
             states_sell.append(t)
-            print("Sell: " + formatPrice(data[t]) + " | Profit: " + formatPrice(data[t] - bought_price))
-            print('Total Profit --> ' + formatPrice(total_profit))
+            s = str(datetime.datetime.now().time().strftime("%H:%M:%S"))
+            print(f"{s} | Sell: {formatPrice(data[t])} | Profit: {formatPrice(reward)} / Total Profit: {formatPrice(total_profit)}")
 
         done = True if t == l - 1 else False
         # appends the details of the state action etc in the memory, which is used further by the exeReply function
@@ -251,10 +287,11 @@ for e in range(episode_count + 1):
             # set_trace()
             # pd.DataFrame(np.array(agent.memory)).to_csv("Agent"+str(e)+".csv")
             # Chart to show how the model performs with the stock goin up and down for each
-            plot_behavior(data, states_buy, states_sell, total_profit)
+            # plot_behavior(data, states_buy, states_sell, total_profit)
         if len(agent.memory) > batch_size:
             agent.expReplay(batch_size)
 
     if e % 2 == 0:
-        agent.model.save("model_ep" + str(e))
-
+        agent.save_model(f"model_ep{e}.h5")
+    reset_tensorflow_keras_backend()
+agent.save_model("final_model.h5")

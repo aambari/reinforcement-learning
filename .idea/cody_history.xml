@@ -1,11 +1,46 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChatHistory">
+    <accountData>
+      <list>
+        <AccountData>
+          <accountId value="VXNlcjozMTE3Mjg=" />
+          <chats>
+            <list>
+              <chat>
+                <accountId value="VXNlcjozMTE3Mjg=" />
+                <internalId value="cbd5d984-e39c-4366-ad97-4ce35e4482a4" />
+                <llm>
+                  <llm>
+                    <usage>
+                      <list>
+                        <option value="chat" />
+                        <option value="edit" />
+                      </list>
+                    </usage>
+                  </llm>
+                </llm>
+              </chat>
+            </list>
+          </chats>
+        </AccountData>
+      </list>
+    </accountData>
     <chats>
       <list>
         <chat>
           <accountId value="VXNlcjozMTE3Mjg=" />
           <internalId value="cbd5d984-e39c-4366-ad97-4ce35e4482a4" />
+          <llm>
+            <llm>
+              <usage>
+                <list>
+                  <option value="chat" />
+                  <option value="edit" />
+                </list>
+              </usage>
+            </llm>
+          </llm>
         </chat>
       </list>
     </chats>
