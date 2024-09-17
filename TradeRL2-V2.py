@@ -33,6 +33,7 @@ if gpus:
 
 # The data already obtained from yahoo finance is imported.
 dataset = read_csv('c://ml//backtesting//EURUSD240-small.csv') * 1000
+
 # Disable the warnings
 import warnings
 warnings.filterwarnings('ignore')
@@ -43,19 +44,20 @@ print('Null Values =', dataset.isnull().values.any())
 # Fill the missing values with the last value available in the dataset
 dataset = dataset.fillna(method='ffill')
 
-X = list(dataset["Close"])
-X = [float(x) for x in X]
+# Only select the relevant columns: Open, High, Low, Close
+dataset = dataset[['Open', 'High', 'Low', 'Close']]
 
+# Split dataset into training and validation sets
 validation_size = 0.2
-train_size = int(len(X) * (1 - validation_size))
-X_train, X_test = X[0:train_size], X[train_size:len(X)]
+train_size = int(len(dataset) * (1 - validation_size))
+X_train, X_test = dataset[0:train_size], dataset[train_size:len(dataset)]
 
 # Add a new variable for loading and training an existing model
-train_from_scratch = True  # Set this to True to load and continue training, False to start fresh
+train_from_scratch = True  # Set this to False to load and continue training
 
 class Agent:
     def __init__(self, state_size, is_tradeready=False, model_name="", train_from_scratch=False):
-        self.state_size = state_size  # normalized previous days,
+        self.state_size = window_size  * 4 # normalized previous days
         self.action_size = 3  # sit, buy, sell
         self.memory = deque(maxlen=1000)
         self.inventory = []
@@ -63,7 +65,7 @@ class Agent:
         self.is_tradeready = is_tradeready
 
         self.gamma = 0.95
-        self.epsilon = 1.0 if  train_from_scratch else 0.5   # Start with a higher epsilon when continuing training
+        self.epsilon = 1.0 if train_from_scratch else 0.5   # Start with a higher epsilon when continuing training
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.999
 
@@ -75,6 +77,7 @@ class Agent:
 
     def _model(self):
         model = Sequential()
+        # Update input_dim to match state_size (which is now 12)
         model.add(Dense(units=64, input_dim=self.state_size, activation="relu"))
         model.add(Dense(units=32, activation="relu"))
         model.add(Dense(units=8, activation="relu"))
@@ -85,8 +88,9 @@ class Agent:
     def action(self, state):
         if not self.is_tradeready and random.random() <= self.epsilon:
             return random.randrange(self.action_size)
-        options = self.model.predict(state, verbose=None)
+        options = self.model.predict(state, verbose=0)
         return np.argmax(options[0])
+
 
     def save_model(self, model_name):
         self.model.save(model_name)
@@ -122,27 +126,40 @@ def formatPrice(n):
 
 # returns the sigmoid
 def sigmoid(x):
-    return 1 / (1 + math.exp(-x))
+    return 1 / (1 + np.exp(-x))
 
-# returns an n-day state representation ending at time t
+# Modify the getState function to include OHLC
 def getState(data, t, n):
     d = t - n + 1
-    block = data[d:t + 1] if d >= 0 else -d * [data[0]] + data[0:t + 1]
+    # If d is negative, we need to pad the state with the first row to maintain size
+    block = data[max(d, 0):t + 1].values.tolist()  # Extracts the block of data from `d` to `t`
+
+    if d < 0:
+        # If d is negative, pad the beginning of the block with the first row until its size is `n`
+        block = (-d * [data.iloc[0].values.tolist()]) + block
+
     res = []
+    # Extracting differences for Open, High, Low, Close
     for i in range(n - 1):
-        res.append(sigmoid(block[i + 1] - block[i]))
+        res.append(sigmoid(block[i + 1][0] - block[i][0]))  # Open prices
+        res.append(sigmoid(block[i + 1][1] - block[i][1]))  # High prices
+        res.append(sigmoid(block[i + 1][2] - block[i][2]))  # Low prices
+        res.append(sigmoid(block[i + 1][3] - block[i][3]))  # Close prices
+
     return np.array([res])
+
 
 # Check for 'Ctrl+M' press to save model
 def check_save_model(agent, episode):
     if keyboard.is_pressed('ctrl+m'):
-        save_name = f"model_ep{episode}.h5"
+        save_name = os.path.splitext(__file__)[0] + f"_ep{e}.h5"
         agent.save_model(save_name)
         print(f'Model saved manually as {save_name}')
 
-# Initialize variables
-window_size = 3
-agent = Agent(window_size, model_name='TradeRL1model.h5', train_from_scratch=False)
+# Update state size based on OHLC values.
+window_size = 3  # same as before
+state_size = (window_size - 1) * 4  # Each state will now have high, low, open, close differences
+agent = Agent(state_size, model_name='', train_from_scratch=True)
 data = X_train
 l = len(data) - 1
 batch_size = 32
@@ -160,22 +177,24 @@ for e in range(episode_count + 1):
     states_buy = []
 
     for t in range(l):
+        state = getState(data, t, window_size + 1)
         action = agent.action(state)
         next_state = getState(data, t + 1, window_size + 1)
+
         reward = 0
 
         if action == 1 and len(agent.inventory) <= max_trades:  # buy
-            agent.inventory.append(data[t])
+            agent.inventory.append(data.iloc[t]["Close"])
             states_buy.append(t)
-            print("Buy: " + formatPrice(data[t]))
+            print("Buy: " + formatPrice(data.iloc[t]["Close"]))
 
         elif action == 2 and len(agent.inventory) > 0:  # sell
             bought_price = agent.inventory.pop(0)
-            reward = data[t] - bought_price
+            reward = data.iloc[t]["Close"] - bought_price
             total_profit += reward
             states_sell.append(t)
             s = str(datetime.datetime.now().time().strftime("%H:%M:%S"))
-            print(f"{s} | Sell: {formatPrice(data[t])} | Profit: {formatPrice(reward)} / Total Profit: {formatPrice(total_profit)}")
+            print(f"{s} | Sell: {formatPrice(data.iloc[t]['Close'])} | Profit: {formatPrice(reward)} / Total Profit: {formatPrice(total_profit)}")
 
         done = True if t == l - 1 else False
         agent.memory.append((state, action, reward, next_state, done))
@@ -190,9 +209,9 @@ for e in range(episode_count + 1):
             agent.expReplay(batch_size)
 
         check_save_model(agent, e)
-        #save model at the
-    agent.save_model(f"model_ep{e}.h5")
+
+    agent.save_model(os.path.splitext(__file__)[0] + f"_ep{e}.h5")
 
     reset_tensorflow_keras_backend()
 
-agent.save_model("final_model.h5")
+agent.save_model(os.path.splitext(__file__)[0] + "_final.h5")

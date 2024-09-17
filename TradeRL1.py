@@ -8,7 +8,7 @@ from pandas import read_csv
 import math
 import random
 import h5py
-# import keyboard  # For detecting key presses
+import keyboard  # For detecting key presses
 import pandas_ta as ta
 import tensorflow as tf
 import gc  # Added for garbage collection
@@ -107,9 +107,10 @@ class Agent:
 
         # self.model = self._model()
 
-
-
-        self.model = load_model(model_name) if is_eval else self._model()
+        if is_eval:
+            self.model = load_model(model_name)
+        else:
+            self.model = self._model()
 
     # Deep Q Learning model- returns the q-value when given state as input
     def _model(self):
@@ -191,18 +192,6 @@ import math
 def formatPrice(n):
     return ("-$" if n < 0 else "$") + "{0:.2f}".format(abs(n))
 
-# def formatPrice(n):
-#     return ("-$" if n < 0 else "$") + "{0:.5f}".format(abs(n)*100) #multiply by 100 to give some value to the pips
-
-# # returns the vector containing stock data from a fixed file
-# def getStockData(key):
-#     vec = []
-#     lines = open("data/" + key + ".csv", "r").read().splitlines()
-
-#     for line in lines[1:]:
-#         vec.append(float(line.split(",")[4])) #Only Close column
-
-#     return vec
 
 # returns the sigmoid
 def sigmoid(x):
@@ -231,11 +220,16 @@ def plot_behavior(data_input, states_buy, states_sell, profit):
     # plt.savefig('output/'+name+'.png')
     plt.show()
 
-
+# Check for 'Ctrl+M' press to save model
+def check_save_model(agent, episode):
+    if keyboard.is_pressed('ctrl+m'):
+        save_name = f"model_ep{episode}.h5"
+        agent.save_model(save_name)
+        print(f'Model saved manually as {save_name}')
 
 # from IPython.core.debugger import set_trace
 window_size = 3
-agent = Agent(window_size)
+agent = Agent(window_size, model_name='TradeRL1model.h5')
 # In this step we feed the closing value of the stock price
 data = X_train
 l = len(data) - 1
@@ -291,7 +285,11 @@ for e in range(episode_count + 1):
         if len(agent.memory) > batch_size:
             agent.expReplay(batch_size)
 
+        check_save_model(agent, e)
+
     if e % 2 == 0:
         agent.save_model(f"model_ep{e}.h5")
     reset_tensorflow_keras_backend()
 agent.save_model("final_model.h5")
+
+
